@@ -1,0 +1,26 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    # Every day at 12:00 midnight Singapore time
+    - cron: "0 16 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sync master with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/merge-upstream" \
+            -f branch="master"
