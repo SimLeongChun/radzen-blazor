@@ -1989,44 +1989,6 @@ window.Radzen = {
         clearTimeout(Radzen[id + 'duration']);
     }
   },
-  createDatePicker(el, popupId, instance, callback) {
-      if(!el) return { dispose: function() {} };
-      var handler = function (e, condition) {
-          if (condition) {
-              Radzen.togglePopup(e.currentTarget.parentNode, popupId, false, instance, callback, true, false);
-          }
-      };
-
-      var input = el.querySelector('.rz-inputtext');
-      var button = el.querySelector('.rz-datepicker-trigger');
-
-      var buttonHandler = function (e) {
-          handler(e, !e.currentTarget.classList.contains('rz-state-disabled') && (input ? !input.classList.contains('rz-readonly') : true));
-      };
-
-      var inputHandler = function (e) {
-          handler(e, e.currentTarget.classList.contains('rz-input-trigger') && !e.currentTarget.classList.contains('rz-readonly'));
-      };
-
-      if (button) {
-          button.onclick = buttonHandler;
-      }
-
-      if (input) {
-          input.onclick = inputHandler;
-      }
-
-      return {
-          dispose: function () {
-              if (button && button.onclick === buttonHandler) {
-                  button.onclick = null;
-              }
-              if (input && input.onclick === inputHandler) {
-                  input.onclick = null;
-              }
-          }
-      };
-  },
   findPopup: function (id) {
     var popups = [];
     for (var i = 0; i < document.body.children.length; i++) {
@@ -5411,22 +5373,9 @@ window.Radzen = {
       grid.addEventListener('touchmove', Radzen[id + 'touchmove'], { passive: false });
   },
   stopColumnResize: function (id, grid, columnIndex) {
-    var el = document.getElementById(id + '-resizer');
-    if(!el) return;
-    var cell = el.parentNode.parentNode;
-    if (!cell) return;
-    if (Radzen[el]) {
-        try { grid.invokeMethodAsync(
-            'RadzenGrid.OnColumnResized',
-            columnIndex,
-            cell.getBoundingClientRect().width
-        ); } catch { }
-        el.style.width = null;
-        document.removeEventListener('mousemove', Radzen[el].mouseMoveHandler);
-        document.removeEventListener('mouseup', Radzen[el].mouseUpHandler);
-        document.removeEventListener('touchmove', Radzen[el].touchMoveHandler)
-        document.removeEventListener('touchend', Radzen[el].mouseUpHandler);
-        Radzen[el] = null;
+    var resize = Radzen[id + 'columnResize'];
+    if (resize) {
+        resize.mouseUpHandler();
     }
   },
   updateFrozenColumnPositions: function(gridElement) {
@@ -5465,60 +5414,108 @@ window.Radzen = {
   },
   startColumnResize: function(id, grid, columnIndex, clientX) {
       var el = document.getElementById(id + '-resizer');
+      var resizeKey = id + 'columnResize';
       var cell = el.parentNode.parentNode;
       var col = document.getElementById(id + '-col');
-      var dataCol = document.getElementById(id + '-data-col');
-      var footerCol = document.getElementById(id + '-footer-col');
-      var isFrozen = cell.classList.contains('rz-frozen-cell');
-      var gridElement = isFrozen ? cell.closest('.rz-data-grid') : null;
-      Radzen[el] = {
+      var gridElement = cell.closest('.rz-data-grid');
+      var hasFrozenColumns = gridElement != null && gridElement.querySelector('.rz-frozen-cell') != null;
+      var table = cell.closest('.rz-grid-table');
+      var colgroup = table ? table.querySelector(':scope > colgroup') : null;
+      var allColumns = colgroup ? Array.from(colgroup.children) : [];
+      var headerCells = cell.parentNode.children.length === allColumns.length
+          ? Array.from(cell.parentNode.children)
+          : [];
+      var pinned = allColumns.map(function (column) {
+          return column === col || !!column.style.width || !column.id.endsWith('-col');
+      });
+      var columns = [];
+      var bounds = [];
+      allColumns.forEach(function (column, index) {
+          if (!column.id.endsWith('-col')) return;
+          var style = getComputedStyle(headerCells[index] || column);
+          columns.push(column);
+          bounds.push({
+              min: parseFloat(style.minWidth) || 0,
+              max: parseFloat(style.maxWidth),
+              pinned: pinned[index]
+          });
+      });
+      var cellStyle = getComputedStyle(cell);
+      var minWidth = parseFloat(cellStyle.minWidth) || 0;
+      var maxWidth = parseFloat(cellStyle.maxWidth);
+      var declaredWidths = allColumns.map(column => column.style.width);
+      var columnWidths = allColumns.map(column => column.getBoundingClientRect().width);
+      allColumns.forEach(function (column, index) {
+          if (pinned[index]) {
+              column.style.width = columnWidths[index] + 'px';
+          }
+      });
+      Radzen[resizeKey] = {
           clientX: clientX,
           width: cell.getBoundingClientRect().width,
+          resized: false,
           mouseUpHandler: function (e) {
-              if (Radzen[el]) {
-                  try { grid.invokeMethodAsync(
-                      'RadzenGrid.OnColumnResized',
-                      columnIndex,
-                      cell.getBoundingClientRect().width
-                  ); } catch { }
-                  el.style.width = null;
-                  document.removeEventListener('mousemove', Radzen[el].mouseMoveHandler);
-                  document.removeEventListener('mouseup', Radzen[el].mouseUpHandler);
-                  document.removeEventListener('touchmove', Radzen[el].touchMoveHandler)
-                  document.removeEventListener('touchend', Radzen[el].mouseUpHandler);
-                  Radzen[el] = null;
+              var resize = Radzen[resizeKey];
+
+              if (!resize) return;
+
+              if (!resize.resized) {
+                  allColumns.forEach(function (column, index) {
+                      column.style.width = declaredWidths[index];
+                  });
               }
+              else {
+                  var widths = columns.map(function (column, index) {
+                      if (!bounds[index].pinned) {
+                          return 0;
+                      }
+
+                      var width = Math.max(parseFloat(column.style.width), bounds[index].min);
+
+                      return Number.isNaN(bounds[index].max) ? width : Math.min(width, bounds[index].max);
+                  });
+
+                  try {
+                      if (columns.length) {
+                          grid.invokeMethodAsync('RadzenGrid.OnColumnsResized', columnIndex, widths[columnIndex], widths);
+                      } else {
+                          grid.invokeMethodAsync('RadzenGrid.OnColumnResized', columnIndex, cell.getBoundingClientRect().width);
+                      }
+                  } catch { }
+              }
+
+              el.style.width = null;
+              document.removeEventListener('mousemove', resize.mouseMoveHandler);
+              document.removeEventListener('mouseup', resize.mouseUpHandler);
+              document.removeEventListener('touchmove', resize.touchMoveHandler)
+              document.removeEventListener('touchend', resize.mouseUpHandler);
+              Radzen[resizeKey] = null;
           },
           mouseMoveHandler: function (e) {
-              if (Radzen[el]) {
-                  var widthFloat = (Radzen[el].width - (Radzen.isRTL(cell) ? -1 : 1) * (Radzen[el].clientX - e.clientX));
-                  var minWidth = parseFloat(cell.style.minWidth || 0)
-                  var maxWidth = parseFloat(cell.style.maxWidth || 0)
+              if (Radzen[resizeKey]) {
+                  var widthFloat = (Radzen[resizeKey].width - (Radzen.isRTL(cell) ? -1 : 1) * (Radzen[resizeKey].clientX - e.clientX));
 
                   if (widthFloat < minWidth) {
                       widthFloat = minWidth;
                   }
 
-                  if (cell.style.maxWidth && widthFloat > maxWidth) {
+                  if (!Number.isNaN(maxWidth) && widthFloat > maxWidth) {
                       widthFloat = maxWidth;
+                  }
+
+                  if (widthFloat !== Radzen[resizeKey].width) {
+                      Radzen[resizeKey].resized = true;
                   }
 
                   var width = widthFloat + 'px';
 
-                  if (cell) {
-                      cell.style.width = width;
-                  }
                   if (col) {
                       col.style.width = width;
-                  }
-                  if (dataCol) {
-                      dataCol.style.width = width;
-                  }
-                  if (footerCol) {
-                      footerCol.style.width = width;
+                  } else {
+                      cell.style.width = width;
                   }
 
-                  if (gridElement) {
+                  if (hasFrozenColumns) {
                       Radzen.updateFrozenColumnPositions(gridElement);
                   }
               }
@@ -5526,15 +5523,15 @@ window.Radzen = {
           touchMoveHandler: function (e) {
               if (e.targetTouches[0]) {
                   e.preventDefault();
-                  Radzen[el].mouseMoveHandler(e.targetTouches[0]);
+                  Radzen[resizeKey].mouseMoveHandler(e.targetTouches[0]);
               }
           }
       };
       el.style.width = "100%";
-      document.addEventListener('mousemove', Radzen[el].mouseMoveHandler);
-      document.addEventListener('mouseup', Radzen[el].mouseUpHandler);
-      document.addEventListener('touchmove', Radzen[el].touchMoveHandler, { passive: false })
-      document.addEventListener('touchend', Radzen[el].mouseUpHandler);
+      document.addEventListener('mousemove', Radzen[resizeKey].mouseMoveHandler);
+      document.addEventListener('mouseup', Radzen[resizeKey].mouseUpHandler);
+      document.addEventListener('touchmove', Radzen[resizeKey].touchMoveHandler, { passive: false })
+      document.addEventListener('touchend', Radzen[resizeKey].mouseUpHandler);
   },
       startSplitterResize: function(id,
         splitter,
@@ -6106,36 +6103,23 @@ Radzen.createNumeric = function(el, isInteger, separator, min, max, isNullable) 
     input.removeEventListener('paste', onPaste);
   }};
 };
-Radzen.createProfileMenu = function(el) {
-  if (!el) return { dispose: function() {} };
-  var toggle = el.querySelector('.rz-navigation-item-wrapper');
-  if (!toggle) return { dispose: function() {} };
-  function onClick() { Radzen.toggleMenuItem(toggle); }
-  toggle.addEventListener('click', onClick);
-  return { dispose: function() { toggle.removeEventListener('click', onClick); }};
+Radzen.menuClick = function (e) {
+  var item = e.target.closest('.rz-navigation-item-wrapper');
+  if (!item) return;
+  var menu = item.closest('[data-click-to-open]');
+  if (!menu) return;
+  var clickToOpen = menu.getAttribute('data-click-to-open') === 'true';
+  var navItem = item.closest('.rz-navigation-item');
+  var hasChildren = navItem && navItem.querySelector('.rz-navigation-menu');
+  if (clickToOpen || hasChildren) {
+    Radzen.toggleMenuItem(item);
+  } else {
+    Radzen.toggleMenuItem(item, e, false);
+  }
 };
-Radzen.createSplitButton = function(el, popupId) {
-  if (!el) return { dispose: function() {} };
-  var btn = el.querySelector('.rz-splitbutton-menubutton');
-  if (!btn) return { dispose: function() {} };
-  function onClick() { if (popupId) Radzen.togglePopup(btn.parentNode, popupId); }
-  btn.addEventListener('click', onClick);
-  return { dispose: function() { btn.removeEventListener('click', onClick); }};
-};
+document.addEventListener('click', Radzen.menuClick);
 Radzen.createMenu = function(el, clickToOpen) {
   if (!el) return { dispose: function() {} };
-  function onClick(e) {
-    var item = e.target.closest('.rz-navigation-item-wrapper');
-    if (!item || !el.contains(item)) return;
-    var navItem = item.closest('.rz-navigation-item');
-    var hasChildren = navItem && navItem.querySelector('.rz-navigation-menu');
-    if (clickToOpen || hasChildren) {
-      Radzen.toggleMenuItem(item);
-    } else {
-      Radzen.toggleMenuItem(item, e, false);
-    }
-  }
-  el.addEventListener('click', onClick);
   var hoverItems = [];
   if (!clickToOpen) {
     el.querySelectorAll('.rz-navigation-item').forEach(function(navItem) {
@@ -6149,7 +6133,6 @@ Radzen.createMenu = function(el, clickToOpen) {
     });
   }
   return { dispose: function() {
-    el.removeEventListener('click', onClick);
     hoverItems.forEach(function(h) {
       h.el.removeEventListener('mouseenter', h.onEnter);
       h.el.removeEventListener('mouseleave', h.onLeave);
@@ -6967,3 +6950,56 @@ Radzen.itemListKeydown = function (e) {
   }
 };
 document.addEventListener('keydown', Radzen.itemListKeydown);
+Radzen.chatKeydown = function (e) {
+  var el = e.target;
+  if (!el || !el.classList || !el.classList.contains('rz-chat-textarea')) return;
+  var container = el.closest('.rz-chat-input');
+  var popupOpen = container && container.querySelector('.rz-chat-mention-popup');
+  if (e.key === 'Enter') {
+    if (!e.shiftKey || popupOpen) {
+      e.preventDefault();
+    }
+  } else if (popupOpen && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+  } else if ((e.key === 'Backspace' || e.key === 'Delete') && el.dataset.mentionSegments) {
+    var start = el.selectionStart;
+    var end = el.selectionEnd;
+    var segments = el.dataset.mentionSegments.split(',');
+    for (var i = 0; i < segments.length; i++) {
+      var parts = segments[i].split(':');
+      var segmentStart = parseInt(parts[0], 10);
+      var segmentEnd = segmentStart + parseInt(parts[1], 10);
+      var hit;
+      if (start !== end) {
+        hit = segmentStart < end && segmentEnd > start;
+      } else {
+        var target = e.key === 'Backspace' ? start - 1 : start;
+        hit = target >= 0 && segmentStart <= target && segmentEnd > target;
+      }
+      if (hit) {
+        e.preventDefault();
+        break;
+      }
+    }
+  }
+};
+document.addEventListener('keydown', Radzen.chatKeydown);
+Radzen.popupTriggerKeydown = function (e) {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  var el = e.target;
+  if (!el || !el.classList) return;
+  var key = e.code ? e.code : e.key;
+  var vertical = key === 'ArrowUp' || key === 'ArrowDown';
+  if (el.classList.contains('rz-splitbutton-menubutton')) {
+    if (vertical) e.preventDefault();
+  } else if (el.classList.contains('rz-menu-list') || el.classList.contains('rz-navigation-menu')) {
+    if (vertical || key === 'Home' || key === 'End' || key === 'Space') e.preventDefault();
+  } else if (el.classList.contains('rz-navigation-item-wrapper') && el.getAttribute('aria-haspopup')) {
+    if (vertical || key === 'Home' || key === 'End' || key === 'Space') e.preventDefault();
+  } else if (el.classList.contains('rz-dropdown') || el.classList.contains('rz-listbox')) {
+    if (vertical || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Space') e.preventDefault();
+  } else if (el.classList.contains('rz-colorpicker')) {
+    if (key === 'Space') e.preventDefault();
+  }
+};
+document.addEventListener('keydown', Radzen.popupTriggerKeydown);
