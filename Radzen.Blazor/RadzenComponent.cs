@@ -166,12 +166,21 @@ namespace Radzen
         /// <returns>Returns the <c>id</c> attribute (if specified) or generates a random one.</returns>
         protected virtual string? GetId()
         {
+            return GetIdAttribute() ?? UniqueID;
+        }
+
+        /// <summary>
+        /// Gets the <c>id</c> attribute specified by the user via unmatched attributes.
+        /// </summary>
+        /// <returns>The <c>id</c> attribute value or <c>null</c> if it is not specified or empty.</returns>
+        protected string? GetIdAttribute()
+        {
             if (Attributes != null && Attributes.TryGetValue("id", out var id) && !string.IsNullOrEmpty(Convert.ToString(@id, Culture)))
             {
                 return $"{@id}";
             }
 
-            return UniqueID;
+            return null;
         }
 
         /// <summary>
@@ -208,7 +217,7 @@ namespace Radzen
         protected IJSRuntime? JSRuntime { get; set; }
 
         [Inject]
-        internal IServiceProvider Services { get; set; } = default!;
+        private IServiceProvider Services { get; set; } = default!;
 
         private Localizer? localizer;
 
