@@ -1156,6 +1156,36 @@ window.Radzen = {
         }); } catch { }
       });
 
+      var lastBounds;
+
+      Radzen[id].instance.addListener('idle', function () {
+        var map = Radzen[id] && Radzen[id].instance;
+        var bounds = map && map.getBounds();
+
+        if (!bounds) {
+          return;
+        }
+
+        var key = bounds.toUrlValue() + '|' + map.getZoom();
+
+        if (key === lastBounds) {
+          return;
+        }
+
+        lastBounds = key;
+
+        var northEast = bounds.getNorthEast();
+        var southWest = bounds.getSouthWest();
+        var mapCenter = map.getCenter();
+
+        try { Radzen[id].invokeMethodAsync('RadzenGoogleMap.OnBoundsChanged', {
+          NorthEast: {Lat: northEast.lat(), Lng: northEast.lng()},
+          SouthWest: {Lat: southWest.lat(), Lng: southWest.lng()},
+          Center: {Lat: mapCenter.lat(), Lng: mapCenter.lng()},
+          Zoom: map.getZoom()
+        }); } catch { }
+      });
+
       Radzen.updateMap(id, apiKey, zoom, center, markers, options, fitBoundsToMarkersOnUpdate, language);
     });
 
@@ -3963,7 +3993,16 @@ window.Radzen = {
       ref._chartRTLObserver.disconnect();
       delete ref._chartRTLObserver;
     }
+    if (ref.observeLegend) {
+      ref.observeLegend(false);
+      delete ref.observeLegend;
+    }
     this.destroyResizable(ref);
+  },
+  observeChartLegend: function (ref, observe) {
+    if (ref && ref.observeLegend) {
+      ref.observeLegend(observe);
+    }
   },
   createRangeNavigator: function (ref, instance) {
     if (!ref) return [0, 0];
@@ -4799,6 +4838,28 @@ window.Radzen = {
     });
     ref._chartRTLObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['dir'] });
     try { suppressDisposed(instance.invokeMethodAsync('SetRTL', document.documentElement.dir === 'rtl')); } catch (e) { }
+
+    var legendObserver = null;
+    ref.observeLegend = function (observe) {
+      if (legendObserver) {
+        legendObserver.disconnect();
+        legendObserver = null;
+      }
+      var legend = observe && window.ResizeObserver ? ref.querySelector(':scope > .rz-legend') : null;
+      if (!legend) return;
+      var lastSize = null;
+      var lastVertical = null;
+      legendObserver = new ResizeObserver(function () {
+        var rect = legend.getBoundingClientRect();
+        var vertical = legend.classList.contains('rz-legend-left') || legend.classList.contains('rz-legend-right');
+        var size = Math.ceil(vertical ? rect.width : rect.height);
+        if (size === lastSize && vertical === lastVertical) return;
+        lastSize = size;
+        lastVertical = vertical;
+        try { suppressDisposed(instance.invokeMethodAsync('LegendResize', size, vertical)); } catch { }
+      });
+      legendObserver.observe(legend);
+    };
 
     this.createResizable(ref, instance);
     var self = this;
@@ -8340,11 +8401,35 @@ Radzen.createFormField = function(el) {
   if (!el || typeof el.addEventListener !== 'function') return { dispose: function() {} };
   function onFocusIn() { el.classList.add('rz-state-focused'); }
   function onFocusOut() { el.classList.remove('rz-state-focused'); }
+  function onMouseDown(e) {
+    if (e.button !== 0 || e.defaultPrevented || !el.hasAttribute('data-focus-on-click')) return;
+    var content = el.querySelector('.rz-form-field-content');
+    var target = e.target;
+    if (!content || !target || !target.closest) return;
+    var slots = '.rz-form-field-start, .rz-form-field-end';
+    if (target !== content) {
+      var slot = target.closest(slots);
+      if (!slot || slot.parentNode !== content) return;
+      var interactive = target.closest('a, button, input, select, textarea, label, [tabindex], [contenteditable]');
+      if (interactive && slot.contains(interactive)) return;
+    }
+    var candidates = content.querySelectorAll('input, select, textarea, [tabindex], [contenteditable]');
+    for (var i = 0; i < candidates.length; i++) {
+      var candidate = candidates[i];
+      if (candidate.disabled || candidate.type === 'hidden' || candidate.tabIndex < 0) continue;
+      if (candidate.closest(slots) || !candidate.getClientRects().length) continue;
+      e.preventDefault();
+      candidate.focus();
+      return;
+    }
+  }
   el.addEventListener('focusin', onFocusIn);
   el.addEventListener('focusout', onFocusOut);
+  el.addEventListener('mousedown', onMouseDown);
   return { dispose: function() {
     el.removeEventListener('focusin', onFocusIn);
     el.removeEventListener('focusout', onFocusOut);
+    el.removeEventListener('mousedown', onMouseDown);
   }};
 };
 Radzen.createSignaturePad = function(element, ref, strokeColor, strokeWidth, disabled, initialValue) {
