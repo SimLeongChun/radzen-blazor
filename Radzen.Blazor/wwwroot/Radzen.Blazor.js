@@ -8384,10 +8384,15 @@ Radzen.createVirtualItemContainer = (scrollable, content, ref) => {
   });
 
   var observer = new ResizeObserver(function () {
+    if (!scrollable.isConnected) {
+      observer.disconnect();
+      return;
+    }
+
     const height = scrollable.clientHeight;
     const width = scrollable.clientWidth;
 
-    ref.invokeMethodAsync('OnResize', width, height);
+    suppressDisposed(ref.invokeMethodAsync('OnResize', width, height));
   });
 
   observer.observe(scrollable);
