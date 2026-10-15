@@ -17,6 +17,8 @@ public static class CanonicalRedirectMiddleware
     private static readonly FrozenDictionary<string, string> StaticRedirects = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["/buttons"] = "/button",
+        ["/chart-gallery"] = "/charts",
+        ["/chart-series"] = "/charts",
         ["/docs"] = "/",
         ["/docs/guides/components/aichat.html"] = "/aichat",
         ["/docs/guides/components/accordion.html"] = "/accordion",
@@ -141,6 +143,11 @@ public static class CanonicalRedirectMiddleware
             return true;
         }
 
+        if (TryMapApiNamespace(path, "Radzen.Blazor.Markdown", "Radzen.Documents.Markdown", out targetPath))
+        {
+            return true;
+        }
+
         if (TryStripApiHtmlExtension(path, out targetPath))
         {
             return true;
@@ -181,6 +188,31 @@ public static class CanonicalRedirectMiddleware
             "" => "/",
             var normalized => normalized
         };
+    }
+
+    private static bool TryMapApiNamespace(string path, string sourceNamespace, string targetNamespace, out string targetPath)
+    {
+        var sourcePath = "/docs/api/" + sourceNamespace;
+
+        if (path.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+        {
+            path = path[..^5];
+        }
+
+        if (path.Equals(sourcePath, StringComparison.OrdinalIgnoreCase))
+        {
+            targetPath = "/docs/api/" + targetNamespace;
+            return true;
+        }
+
+        if (path.StartsWith(sourcePath + ".", StringComparison.OrdinalIgnoreCase))
+        {
+            targetPath = "/docs/api/" + targetNamespace + path[sourcePath.Length..];
+            return true;
+        }
+
+        targetPath = string.Empty;
+        return false;
     }
 
     private static bool TryStripApiHtmlExtension(string path, out string targetPath)
