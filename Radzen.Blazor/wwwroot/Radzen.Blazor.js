@@ -1809,11 +1809,12 @@ window.Radzen = {
     }
     el.focus();
   },
-  focusNext: function (container, reverse) {
+  focusNext: function (container, reverse, popupId) {
     if (!container) return;
+    if (container.isConnected && Radzen.focusNextInTabOrder(container, reverse, popupId)) return;
     var selector = 'a[href]:not([disabled]):not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([type="hidden"]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"]):not([disabled])';
     var candidates = Array.from(document.querySelectorAll(selector)).filter(function (el) {
-      return (el.offsetWidth > 0 || el.offsetHeight > 0) && el !== container && !container.contains(el);
+      return (el.offsetWidth > 0 || el.offsetHeight > 0) && el !== container && !container.contains(el) && !Radzen.isInPopup(el, popupId);
     });
     if (reverse) {
       for (var i = candidates.length - 1; i >= 0; i--) {
@@ -1830,6 +1831,57 @@ window.Radzen = {
         }
       }
     }
+  },
+  focusNextInTabOrder: function (container, reverse, popupId) {
+    var selector = 'a[href], button, input:not([type="hidden"]), select, textarea, details > summary, [tabindex]';
+    var candidates = Array.from(document.querySelectorAll(selector)).filter(function (el) {
+      return el === container ||
+        (!container.contains(el) && !Radzen.isInPopup(el, popupId) && Radzen.isTabbable(el));
+    });
+
+    var radioGroups = new Map();
+    candidates.forEach(function (el) {
+      if (el.type === 'radio' && el.name) {
+        var owner = el.form || document;
+        var groups = radioGroups.get(owner) || new Map();
+        var radios = groups.get(el.name) || [];
+        radios.push(el);
+        groups.set(el.name, radios);
+        radioGroups.set(owner, groups);
+      }
+    });
+    var keptRadios = new Set();
+    radioGroups.forEach(function (groups) {
+      groups.forEach(function (radios) {
+        keptRadios.add(radios.find(function (r) { return r.checked; }) || radios[0]);
+      });
+    });
+
+    var rank = function (el) { return el.tabIndex > 0 ? el.tabIndex : Number.MAX_SAFE_INTEGER; };
+    var ordered = candidates
+      .filter(function (el) { return !(el.type === 'radio' && el.name) || keptRadios.has(el); })
+      .map(function (el, index) { return { el: el, index: index }; })
+      .sort(function (a, b) { return rank(a.el) - rank(b.el) || a.index - b.index; })
+      .map(function (item) { return item.el; });
+
+    var position = ordered.indexOf(container);
+    if (position < 0) return false;
+    var next = ordered[reverse ? position - 1 : position + 1];
+    if (!next) return false;
+    next.focus();
+    return true;
+  },
+  isTabbable: function (el) {
+    if (el.tabIndex < 0 || el.matches(':disabled') || el.closest('[inert]')) return false;
+    if (el.offsetWidth === 0 && el.offsetHeight === 0) return false;
+    var style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+    var parent = el.parentElement;
+    if (el.tagName === 'SUMMARY' && parent && parent.tagName === 'DETAILS') parent = parent.parentElement;
+    return !(parent && parent.closest('details:not([open])'));
+  },
+  isInPopup: function (el, popupId) {
+    return !!popupId && !!el.closest('#' + CSS.escape(popupId));
   },
   scrollCarouselItem: function (el, duration) {
     var container = el.parentElement;
@@ -2542,18 +2594,49 @@ window.Radzen = {
 
     e.preventDefault();
   },
-  openContextMenu: function (x,y,id, instance, callback) {
-    Radzen.closePopup(id);
-
+  openContextMenu: function (x, y, id, instance, callback, closeOnScroll = false) {
     var invoker = document.activeElement;
     if (invoker && invoker !== document.body) {
         Radzen[id + 'contextMenuInvoker'] = invoker;
     }
 
+    var previousPopup = document.getElementById(id);
+    var target = closeOnScroll && (x || y) ?
+        document.elementsFromPoint(x, y).find(function (el) { return !previousPopup || !previousPopup.contains(el); }) :
+        invoker;
+
+    Radzen.closePopup(id);
+
     Radzen.openPopup(null, id, false, null, x, y, instance, callback);
 
+    var popup = document.getElementById(id);
+    if (popup && closeOnScroll) {
+        if (popup.__contextMenuScrollHandler) {
+            document.removeEventListener('scroll', popup.__contextMenuScrollHandler, true);
+        }
+
+        popup.__contextMenuTarget = target;
+        popup.__contextMenuScrollHandler = function (e) {
+            var scrollTarget = e.target;
+            var contextMenuTarget = popup.__contextMenuTarget;
+            var targetScrolled = scrollTarget === document ||
+                !contextMenuTarget ||
+                !contextMenuTarget.isConnected ||
+                scrollTarget && scrollTarget.contains && scrollTarget.contains(contextMenuTarget);
+
+            if (!targetScrolled || scrollTarget && scrollTarget.nodeType && popup.contains(scrollTarget)) {
+                return;
+            }
+
+            popup.__contextMenuClosedOnScroll = true;
+            Radzen.activeElement = null;
+            Radzen.closePopup(id, instance, callback, e);
+        };
+
+        document.addEventListener('scroll', popup.__contextMenuScrollHandler, true);
+    }
+
     requestAnimationFrame(function () {
-        var popup = document.getElementById(id);
         if (popup) {
             var menu = popup.querySelector('.rz-menu');
             if (menu) {
@@ -2565,8 +2648,17 @@ window.Radzen = {
   restoreContextMenuFocus: function (id) {
     var invoker = Radzen[id + 'contextMenuInvoker'];
     Radzen[id + 'contextMenuInvoker'] = null;
+    var popup = document.getElementById(id);
+    var closedOnScroll = popup && popup.__contextMenuClosedOnScroll;
+    if (popup) {
+        delete popup.__contextMenuClosedOnScroll;
+    }
     if (invoker && document.body.contains(invoker) && typeof invoker.focus === 'function') {
-        invoker.focus();
+        if (closedOnScroll) {
+            invoker.focus({ preventScroll: true });
+        } else {
+            invoker.focus();
+        }
     }
   },
   openTooltip: function (target, id, delay, duration, position, closeTooltipOnDocumentClick, instance, callback, clientX, clientY) {
@@ -3061,6 +3153,11 @@ window.Radzen = {
   closePopup: function (id, instance, callback, e, preventFocusRestore) {
     var popup = document.getElementById(id);
     if (!popup) return;
+    if (popup.__contextMenuScrollHandler) {
+      document.removeEventListener('scroll', popup.__contextMenuScrollHandler, true);
+      delete popup.__contextMenuScrollHandler;
+      delete popup.__contextMenuTarget;
+    }
     var popupInfo = (Radzen.popups || []).find(function (p) { return p.id === id; });
     if (popupInfo && popupInfo.parent) {
       Radzen.setPopupAriaExpanded(popupInfo.parent, id, false);
@@ -3192,6 +3289,11 @@ window.Radzen = {
   destroyPopup: function (id) {
     var popup = document.getElementById(id);
     if (popup) {
+      if (popup.__contextMenuScrollHandler) {
+          document.removeEventListener('scroll', popup.__contextMenuScrollHandler, true);
+          delete popup.__contextMenuScrollHandler;
+          delete popup.__contextMenuTarget;
+      }
       if (popup.__escapeHandler) {
           popup.removeEventListener('keydown', popup.__escapeHandler, true);
           delete popup.__escapeHandler;
@@ -7590,6 +7692,8 @@ Radzen.createAutoComplete = function(el, popupId, openOnFocus, instance, openCal
 Radzen.createDataGrid = function(el) {
   if (!el) return { dispose: function() {} };
   function onClick(e) {
+    if (e.__rzDataGridHandled) return;
+    e.__rzDataGridHandled = true;
     var label = e.target.closest('.rz-cell-filter-label');
     if (label) { e.preventDefault(); }
     var btn = e.target.closest('button[aria-haspopup][aria-controls]');
@@ -7598,6 +7702,8 @@ Radzen.createDataGrid = function(el) {
     }
   }
   function onMousedown(e) {
+    if (e.__rzDataGridHandled) return;
+    e.__rzDataGridHandled = true;
     var btn = e.target.closest('.rz-apply-filter');
     if (btn) { Radzen.blur(btn, e); }
   }
