@@ -1798,6 +1798,104 @@ window.Radzen = {
         el.ondragstart = function (e) { e.dataTransfer.setData('', e.target.id); };
     }
   },
+  positionValidator: function (id, component, position) {
+    var validator = document.getElementById(id);
+
+    if (!validator) {
+      return;
+    }
+
+    if (validator.__rzObserver) {
+      validator.__rzObserver.disconnect();
+    }
+
+    validator.style.transform = '';
+
+    var named = document.getElementById(component) || document.querySelector('[name="' + component + '"]');
+
+    if (position == 'bottom' || !named) {
+      return;
+    }
+
+    var anchor = named.parentElement && getComputedStyle(named).display == 'none' ? named.parentElement : named;
+    var observer = null;
+    var observedField = null;
+
+    var resolveField = function () {
+      if (!anchor.isConnected || anchor.getClientRects().length == 0) {
+        return null;
+      }
+
+      var field = anchor;
+
+      while (field && (field.offsetWidth == 0 || field.offsetHeight == 0)) {
+        field = field.parentElement;
+      }
+
+      return field && field.closest('.rz-radio-button-list') || field;
+    };
+
+    var place = function () {
+      var gap = 12;
+
+      validator.style.transform = '';
+
+      var field = resolveField();
+
+      if (!field || validator.getClientRects().length == 0) {
+        return;
+      }
+
+      if (field != anchor && field != observedField) {
+        requestAnimationFrame(function () {
+          if (validator.__rzObserver == observer) {
+            track(resolveField());
+          }
+        });
+      }
+
+      var t = field.getBoundingClientRect();
+      var v = validator.getBoundingClientRect();
+      var left = t.left;
+      var top = t.top;
+
+      if (position == 'top') {
+        top = t.top - v.height - gap;
+      } else if (position == 'left') {
+        left = t.left - v.width - gap;
+      } else if (position == 'right') {
+        left = t.right + gap;
+      }
+
+      validator.style.transform = 'translate(' + (left - v.left) + 'px, ' + (top - v.top) + 'px)';
+    };
+
+    var track = function (field) {
+      if (!field || field == anchor || field == observedField) {
+        return;
+      }
+
+      if (observedField) {
+        observer.unobserve(observedField);
+      }
+
+      observedField = field;
+      observer.observe(field);
+    };
+
+    observer = validator.__rzObserver = new ResizeObserver(function () {
+      if (!validator.isConnected) {
+        observer.disconnect();
+        return;
+      }
+
+      place();
+    });
+
+    observer.observe(anchor);
+    observer.observe(validator);
+    track(resolveField());
+  },
   focusElement: function (elementId, onlyIfFocusNotMoved) {
     var el = document.getElementById(elementId);
     if (!el) return;
@@ -5172,6 +5270,61 @@ window.Radzen = {
 
     return { rowIndex: -1, columnIndex: -1 };
   },
+  ensureTableCellSelection: function (context, section, position) {
+    var ref = context.ref;
+    var table = context.table;
+    var cell = context.cell;
+
+    if (!ref || !table || !cell || table.contains(cell) || !ref.contains(table) || !position) {
+      return;
+    }
+
+    if (!section || !table.contains(section) || !section.rows.length) {
+      section = table.tBodies.length ? table.tBodies[0] : table.tHead;
+    }
+
+    if ((!section || !section.rows.length) && table.tHead && table.tHead.rows.length) {
+      section = table.tHead;
+    }
+
+    var matrix = this.getCellMatrix(section);
+    if (!matrix.length) {
+      return;
+    }
+
+    var rowIndex = Math.max(0, Math.min(position.rowIndex, matrix.length - 1));
+    var row = matrix[rowIndex] || [];
+    if (!row.length) {
+      return;
+    }
+
+    var columnIndex = Math.max(0, Math.min(position.columnIndex, row.length - 1));
+    var target = row[columnIndex];
+
+    for (var offset = 1; !target && (columnIndex - offset >= 0 || columnIndex + offset < row.length); offset++) {
+      target = row[columnIndex - offset] || row[columnIndex + offset];
+    }
+
+    if (!target) {
+      return;
+    }
+
+    var range = document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(true);
+    var selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    ref.focus();
+
+    if (ref.lastSelectedTableCell && !ref.contains(ref.lastSelectedTableCell)) {
+      ref.lastSelectedTableCell = target;
+    }
+
+    if (!this.getSelectedTableCells(ref).length) {
+      target.classList.add('rz-html-editor-cell-selected');
+    }
+  },
   clearSelectedTableCells: function (ref) {
     if (!ref) {
       return;
@@ -5512,8 +5665,13 @@ window.Radzen = {
     return table.tBodies[0];
   },
   getTableColumnCount: function (table) {
-    var firstRow = table.rows.length ? table.rows[0] : null;
-    return firstRow ? firstRow.children.length : 0;
+    var columns = 0;
+    Array.prototype.forEach.call(table.children, function (section) {
+      this.getCellMatrix(section).forEach(function (row) {
+        columns = Math.max(columns, row.length);
+      });
+    }, this);
+    return columns;
   },
   createTableRow: function (ref, columns, header) {
     var tr = document.createElement('tr');
@@ -5639,6 +5797,7 @@ window.Radzen = {
   },
   deleteTableRow: function (context) {
     var table = context.table;
+    var columns = this.getTableColumnCount(table);
     if (context.row) {
       context.row.remove();
     }
@@ -5646,7 +5805,7 @@ window.Radzen = {
       table.deleteTHead();
     }
     if (table.tBodies.length && !table.tBodies[0].rows.length) {
-      table.tBodies[0].appendChild(this.createTableRow(context.ref, this.getTableColumnCount(table) || 1, false));
+      table.tBodies[0].appendChild(this.createTableRow(context.ref, columns || 1, false));
     }
   },
   addTableColumn: function (context, command) {
@@ -5784,9 +5943,15 @@ window.Radzen = {
         ? this.getTableContextFromTarget(ref, ref.contextMenuTarget)
         : this.getTableContext(ref);
 
-      if (!context.table) {
+      var requiresCell = ['addRowBefore', 'addRowAfter', 'deleteRow', 'addColumnBefore', 'addColumnAfter', 'deleteColumn',
+        'mergeCellRight', 'mergeCellDown', 'splitCell'].includes(name);
+      if (!context.table || (requiresCell && (!context.cell || !context.row))) {
         return this.createCommandResult(ref, false, 'table.action.requiresTable');
       }
+
+      var restoresSelection = ['deleteRow', 'deleteColumn', 'updateTable', 'mergeCellRight', 'mergeCellDown'].includes(name);
+      var section = restoresSelection && context.row ? context.row.parentElement : null;
+      var position = context.cell && section ? this.getCellPosition(section, context.cell) : null;
 
       switch (name) {
         case 'copyCells': return this.copyTableCells(ref);
@@ -5807,6 +5972,8 @@ window.Radzen = {
         case 'splitCell': this.splitTableCell(context); break;
         case 'deleteTable': this.deleteTable(context); break;
       }
+
+      this.ensureTableCellSelection(context, section, position);
 
       return this.createCommandResult(ref, true);
     } finally {
@@ -5839,20 +6006,24 @@ window.Radzen = {
     context.table.remove();
   },
   getEditorHtml: function (ref) {
-    var selected = Array.from(ref.querySelectorAll('img.rz-state-selected'));
+    var selected = Array.from(ref.querySelectorAll('img.rz-state-selected')).map(function (element) {
+      return { element: element, className: 'rz-state-selected' };
+    }).concat(Array.from(ref.querySelectorAll('td.rz-html-editor-cell-selected,th.rz-html-editor-cell-selected')).map(function (element) {
+      return { element: element, className: 'rz-html-editor-cell-selected' };
+    }));
 
-    for (var img of selected) {
-      img.classList.remove('rz-state-selected');
+    for (var item of selected) {
+      item.element.classList.remove(item.className);
 
-      if (!img.getAttribute('class')) {
-        img.removeAttribute('class');
+      if (!item.element.getAttribute('class')) {
+        item.element.removeAttribute('class');
       }
     }
 
     var html = ref.innerHTML;
 
-    for (var img of selected) {
-      img.classList.add('rz-state-selected');
+    for (var item of selected) {
+      item.element.classList.add(item.className);
     }
 
     return html;
@@ -6243,7 +6414,7 @@ window.Radzen = {
         if (pasteCell && ref.contains(pasteCell) && ref.copiedCells && ref.copiedCells.matrix) {
           e.preventDefault();
           Radzen.pasteSelectedTableCells(ref, pasteCell);
-          try { instance.invokeMethodAsync('OnChange', ref.innerHTML); } catch { }
+          try { suppressDisposed(instance.invokeMethodAsync('OnChange', Radzen.getEditorHtml(ref))); } catch { }
           return;
         }
       }
@@ -6360,6 +6531,16 @@ window.Radzen = {
         }
         ref.lastSelectedTableCell = cell;
         ref.contextMenuTarget = cell;
+        ref.focus({ preventScroll: true });
+        var selection = getSelection();
+        if (!cell.contains(selection.focusNode)) {
+          var range = document.createRange();
+          range.selectNodeContents(cell);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        Radzen.saveSelection(ref);
         e.preventDefault();
         try { instance.invokeMethodAsync('OnContextMenu', e.clientX, e.clientY); } catch { }
       }

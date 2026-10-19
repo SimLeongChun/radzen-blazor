@@ -280,9 +280,16 @@ namespace Radzen.Blazor
             {
                 if (e.Value is string command)
                 {
-                    await RestoreSelectionAsync();
-                    await ExecuteTableCommandAsync(command);
-                    await UpdateCommandState();
+                    try
+                    {
+                        await RestoreSelectionAsync();
+                        await ExecuteTableCommandAsync(command);
+                        await UpdateCommandState();
+                    }
+                    finally
+                    {
+                        ContextMenuService?.Close();
+                    }
                 }
             });
         }
