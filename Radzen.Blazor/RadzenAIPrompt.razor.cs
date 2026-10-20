@@ -28,7 +28,6 @@ namespace Radzen.Blazor
         [Inject]
         IServiceProvider ServiceProvider { get; set; } = default!;
 
-        private bool preventDefault;
         private string? lastPrompt;
         private AIPromptCommand? lastCommand;
         private CancellationTokenSource? cts;
@@ -333,9 +332,8 @@ namespace Radzen.Blazor
             }
         }
 
-        private async Task OnInput(ChangeEventArgs args)
+        private async Task OnInput()
         {
-            Value = args.Value?.ToString();
             await ValueChanged.InvokeAsync(Value);
         }
 
@@ -343,12 +341,7 @@ namespace Radzen.Blazor
         {
             if (args.Key == "Enter" && !args.ShiftKey && !IsGenerating)
             {
-                preventDefault = true;
                 await Generate();
-            }
-            else
-            {
-                preventDefault = false;
             }
         }
 

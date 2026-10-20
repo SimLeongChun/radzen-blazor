@@ -8987,6 +8987,13 @@ Radzen.chatKeydown = function (e) {
   }
 };
 document.addEventListener('keydown', Radzen.chatKeydown);
+Radzen.aiPromptKeydown = function (e) {
+  if (e.isComposing) return;
+  var el = e.target;
+  if (!el || !el.classList || !el.classList.contains('rz-aiprompt-textarea')) return;
+  if (e.key === 'Enter' && !e.shiftKey) e.preventDefault();
+};
+document.addEventListener('keydown', Radzen.aiPromptKeydown);
 Radzen.popupTriggerKeydown = function (e) {
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   var el = e.target;
