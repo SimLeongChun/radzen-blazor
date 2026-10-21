@@ -2439,6 +2439,7 @@ window.Radzen = {
       files.push({
         Name: file.name,
         Size: file.size,
+        ContentType: file.type,
         Url: URL.createObjectURL(file)
       });
     }
@@ -3138,15 +3139,14 @@ window.Radzen = {
                 var vv = window.visualViewport;
                 var viewportTop = vv.offsetTop;
                 var viewportBottom = viewportTop + vv.height;
+                itemsWrapper.style.maxHeight = popup.__originalWrapperMaxHeight;
+                popup.style.top = popup.__originalPopupTop;
                 var pRect = parent.getBoundingClientRect();
                 var popRect = popup.getBoundingClientRect();
-                if (popRect.top >= viewportTop - 1 && popRect.bottom <= viewportBottom + 1) {
-                    itemsWrapper.style.maxHeight = popup.__originalWrapperMaxHeight;
-                    popup.style.top = popup.__originalPopupTop;
-                    return;
-                }
-                var spaceBelow = viewportBottom - pRect.bottom - 5;
-                var spaceAbove = pRect.top - viewportTop - 5;
+                if (popRect.top >= viewportTop - 1 && popRect.bottom <= viewportBottom + 1) return;
+                var chromeHeight = popRect.height - itemsWrapper.getBoundingClientRect().height;
+                var spaceBelow = viewportBottom - pRect.bottom - 5 - chromeHeight;
+                var spaceAbove = pRect.top - viewportTop - 5 - chromeHeight;
                 var sTop = /Edge/.test(navigator.userAgent) ? document.body.scrollTop : document.documentElement.scrollTop;
                 if (spaceBelow >= spaceAbove) {
                     popup.style.top = (pRect.bottom + sTop) + 'px';
@@ -9042,6 +9042,23 @@ Radzen.tabsKeydown = function (e) {
   }
 };
 document.addEventListener('keydown', Radzen.tabsKeydown);
+Radzen.menuKeydown = function (e) {
+  if (e.altKey || e.ctrlKey || e.metaKey || e.isComposing) return;
+  var el = e.target;
+  if (!el || !el.closest) return;
+  if (el.closest('input, textarea, select, button, [contenteditable]')) return;
+  var menu = el.closest('ul.rz-menu');
+  if (!menu) return;
+  var role = menu.getAttribute('role');
+  if (role !== 'menubar' && role !== 'menu') return;
+  var key = e.code ? e.code : e.key;
+  if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown'
+    || key === 'Home' || key === 'End' || key === 'Enter' || key === 'Space' || key === 'Escape'
+    || (e.key && e.key.length === 1)) {
+    e.preventDefault();
+  }
+};
+document.addEventListener('keydown', Radzen.menuKeydown);
 
 Radzen.createMarkdownEditor = function (editable, textarea, instance, shortcuts) {
   function invoke(editor, name, ...args) {
