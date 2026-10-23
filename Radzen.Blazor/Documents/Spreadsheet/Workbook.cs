@@ -47,11 +47,15 @@ public class Workbook
     /// </summary>
     public IDictionary<string, string> DefinedNames { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    internal List<ExternalLink> ExternalLinks { get; } = [];
+
     private readonly Dictionary<string, FormulaSyntaxTree> definedNameTrees = [];
 
-    internal FormulaSyntaxTree? ResolveDefinedName(string name)
+    internal HashSet<string> HiddenDefinedNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    internal FormulaSyntaxTree? ResolveDefinedName(string name, Worksheet sheet)
     {
-        if (!DefinedNames.TryGetValue(name, out var refersTo))
+        if (!sheet.DefinedNames.TryGetValue(name, out var refersTo) && !DefinedNames.TryGetValue(name, out refersTo))
         {
             return null;
         }
@@ -289,9 +293,12 @@ public class Workbook
             }
         }
 
-        foreach (var (name, refersTo) in DefinedNames.ToList())
+        foreach (var names in sheets.Select(sheet => sheet.DefinedNames).Prepend(DefinedNames))
         {
-            DefinedNames[name] = RenameSheetInReference(refersTo, oldName, newName)!;
+            foreach (var (name, refersTo) in names.ToList())
+            {
+                names[name] = RenameSheetInReference(refersTo, oldName, newName)!;
+            }
         }
     }
 
@@ -329,7 +336,7 @@ public class Workbook
 
     internal void OnCellValueChanged(Cell cell)
     {
-        if (!Graph.HasDependents(cell))
+        if (!Graph.HasDependents(cell) && Graph.VolatileCells.Count == 0)
         {
             return;
         }
@@ -340,7 +347,7 @@ public class Workbook
             return;
         }
 
-        EvaluateFormulas(Graph.GetTopologicallySortedDependencies(cell));
+        EvaluateFormulas(Graph.GetTopologicallySortedDependencies([cell, .. Graph.VolatileCells]));
     }
 
     internal void OnCellFormulaChanged(Cell cell)
@@ -352,7 +359,7 @@ public class Workbook
         }
 
         Graph.Add(cell);
-        EvaluateFormulas([cell, .. Graph.GetTopologicallySortedDependencies(cell)]);
+        EvaluateFormulas(Graph.GetTopologicallySortedDependencies([cell, .. Graph.VolatileCells]));
     }
 
     internal void OnUpdateEnded(Worksheet sheet)
@@ -385,6 +392,7 @@ public class Workbook
         }
 
         roots.AddRange(changedDuringUpdate);
+        roots.AddRange(Graph.VolatileCells);
 
         pendingFormulaCells.Clear();
         updatedSheets.Clear();

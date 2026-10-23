@@ -31,13 +31,15 @@ static class XlsxReader
         var sharedStrings = ParseSharedStrings(archive);
         var sheetInfos = ParseSheetDefinitions(archive);
 
-        ParseDefinedNames(archive, workbook);
+        ParseExternalLinks(archive, workbook);
 
         foreach (var sheetInfo in sheetInfos)
         {
             var sheet = LoadSheet(archive, sheetInfo, styleInfo, sharedStrings);
             workbook.AddSheet(sheet);
         }
+
+        ParseDefinedNames(archive, workbook);
 
         foreach (var sheet in workbook.Sheets)
         {
@@ -62,17 +64,98 @@ static class XlsxReader
         var doc = XDocument.Load(stream);
         var ns = doc.Root!.Name.Namespace;
 
+        var sheetNames = doc.Descendants(ns + "sheet").Select(sheet => sheet.Attribute("name")?.Value).ToList();
+
         foreach (var element in doc.Descendants(ns + "definedName"))
         {
             var name = element.Attribute("name")?.Value;
 
-            if (string.IsNullOrEmpty(name) || name.StartsWith("_xlnm.", StringComparison.Ordinal) || element.Attribute("localSheetId") is not null)
+            if (string.IsNullOrEmpty(name))
             {
                 continue;
             }
 
-            workbook.DefinedNames[name] = element.Value;
+            var names = workbook.DefinedNames;
+            var hiddenNames = workbook.HiddenDefinedNames;
+
+            if (element.Attribute("localSheetId")?.Value is { } localSheetId)
+            {
+                if (!int.TryParse(localSheetId, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+                    || index >= sheetNames.Count
+                    || sheetNames[index] is not { } sheetName
+                    || workbook.GetSheet(sheetName) is not { } sheet)
+                {
+                    continue;
+                }
+
+                names = sheet.DefinedNames;
+                hiddenNames = sheet.HiddenDefinedNames;
+            }
+
+            names[name] = element.Value;
+
+            if (element.Attribute("hidden")?.Value is "1" or "true")
+            {
+                hiddenNames.Add(name);
+            }
         }
+    }
+
+    private static void ParseExternalLinks(ZipArchive archive, Workbook workbook)
+    {
+        var workbookEntry = archive.GetEntry("xl/workbook.xml");
+        var relsEntry = archive.GetEntry("xl/_rels/workbook.xml.rels");
+
+        if (workbookEntry is null || relsEntry is null)
+        {
+            return;
+        }
+
+        XDocument workbookDoc;
+        using (var stream = workbookEntry.Open())
+        {
+            workbookDoc = XDocument.Load(stream);
+        }
+
+        XDocument relsDoc;
+        using (var stream = relsEntry.Open())
+        {
+            relsDoc = XDocument.Load(stream);
+        }
+
+        var ns = workbookDoc.Root!.Name.Namespace;
+        XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        XNamespace relsNs = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+        var targets = relsDoc.Descendants(relsNs + "Relationship")
+            .Where(relationship => relationship.Attribute("Id") is not null && relationship.Attribute("Target") is not null)
+            .ToDictionary(relationship => relationship.Attribute("Id")!.Value, relationship => relationship.Attribute("Target")!.Value.Replace("\\", "/", StringComparison.Ordinal));
+
+        foreach (var reference in workbookDoc.Descendants(ns + "externalReference"))
+        {
+            if (reference.Attribute(r + "id")?.Value is not { } id || !targets.TryGetValue(id, out var target))
+            {
+                continue;
+            }
+
+            var partPath = ResolveTarget("xl/workbook.xml", target);
+
+            if (archive.GetEntry(partPath) is not { } partEntry)
+            {
+                continue;
+            }
+
+            workbook.ExternalLinks.Add(new ExternalLink(ReadAllBytes(partEntry), archive.GetEntry(GetRelationshipsPath(partPath)) is { } partRels ? ReadAllBytes(partRels) : null));
+        }
+    }
+
+    private static byte[] ReadAllBytes(ZipArchiveEntry entry)
+    {
+        using var stream = entry.Open();
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+
+        return buffer.ToArray();
     }
 
     private static StyleInfo ParseStyles(ZipArchive archive)
@@ -2219,11 +2302,12 @@ static class XlsxReader
             var formula1 = dvElement.Element(sNs + "formula1")?.Value;
             var formula2 = dvElement.Element(sNs + "formula2")?.Value;
 
-            // For list type, formula1 contains individually quoted items: "Yes","No","Maybe"
-            // Or may be wrapped as a single string: "Yes,No,Maybe"
-            if (type == DataValidationType.List && formula1 is not null)
+            if (type == DataValidationType.List && !string.IsNullOrWhiteSpace(formula1) && !formula1.TrimStart().StartsWith('"'))
             {
-                // Remove surrounding quotes from each item and rejoin with commas
+                formula1 = "=" + formula1;
+            }
+            else if (type == DataValidationType.List && formula1 is not null)
+            {
                 var parts = formula1.Split(',');
                 formula1 = string.Join(",", parts.Select(p => p.Trim().Trim('"')));
             }
