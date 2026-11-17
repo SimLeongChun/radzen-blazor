@@ -1,23 +1,25 @@
+
 name: Sync fork with upstream
 
 on:
   schedule:
-    # Every day at 12:00 midnight Singapore time
+    # Every day at 12:00 AM Singapore time (UTC+8)
     - cron: "0 16 * * *"
 
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   sync:
+    name: Sync master with upstream
     runs-on: ubuntu-latest
 
     steps:
       - name: Sync master with upstream
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
         run: |
           gh api \
             --method POST \
