@@ -487,6 +487,14 @@ namespace Radzen.Blazor
         public EventCallback<ChatToolCall> ToolCallCompleted { get; set; }
 
         /// <summary>
+        /// Gets or sets whether HTML tags in message text are rendered.
+        /// When <c>true</c> (default), allow-listed HTML tags and attributes are rendered and everything else is removed, as in <see cref="RadzenMarkdown.AllowHtml"/>.
+        /// When <c>false</c>, HTML in message text is displayed as literal text. Set to <c>false</c> when messages come from untrusted users or from a model that reads untrusted content.
+        /// </summary>
+        [Parameter]
+        public bool AllowHtml { get; set; } = true;
+
+        /// <summary>
         /// Gets or sets whether to show the clear chat button.
         /// </summary>
         [Parameter]
@@ -906,11 +914,7 @@ namespace Radzen.Blazor
         {
             IsLoading = true;
             var previousCts = cts;
-#if NET8_0_OR_GREATER
             await previousCts.CancelAsync();
-#else
-            previousCts.Cancel();
-#endif
             previousCts.Dispose();
             cts = new CancellationTokenSource();
 

@@ -2262,13 +2262,52 @@ window.Radzen = {
         }
     }
   },
-  focusTableRow: function (gridId, key, rowIndex, cellIndex, isVirtual) {
+  scrollGridCellIntoView: function (scroller, cell) {
+    if (!scroller || !cell || cell.classList.contains('rz-frozen-cell')) return;
+
+    var bounds = scroller.getBoundingClientRect();
+    var left = bounds.left;
+    var right = bounds.left + scroller.clientWidth;
+    var middle = (left + right) / 2;
+    var siblings = cell.parentNode ? cell.parentNode.children : [];
+
+    for (var i = 0; i < siblings.length; i++) {
+        if (!siblings[i].classList.contains('rz-frozen-cell')) continue;
+        var frozen = siblings[i].getBoundingClientRect();
+        if (frozen.width === 0) continue;
+        if ((frozen.left + frozen.right) / 2 < middle) {
+            left = Math.max(left, frozen.right);
+        } else {
+            right = Math.min(right, frozen.left);
+        }
+    }
+
+    var rect = cell.getBoundingClientRect();
+    if (rect.left < left) {
+        scroller.scrollLeft -= left - rect.left;
+    } else if (rect.right > right) {
+        scroller.scrollLeft += rect.right - right;
+    }
+  },
+  focusTableRow: function (gridId, key, rowIndex, cellIndex, isVirtual, columnCount) {
     var grid = document.getElementById(gridId);
     if (!grid) return;
 
     var table = grid.querySelector('.rz-grid-table');
     var tbody = table.tBodies[0];
     var thead = table.tHead;
+    var virtualColumns = columnCount != null;
+    var cellAt = function (row, index) {
+        if (!row) return null;
+        if (!virtualColumns) return row.cells[index];
+        for (var c = 0; c < row.cells.length; c++) {
+            if (row.cells[c].getAttribute('data-virtual-column-index') == index) return row.cells[c];
+        }
+        return null;
+    };
+    var lastCellIndex = function (row) {
+        return virtualColumns ? columnCount - 1 : row.cells.length - 1;
+    };
 
     var rows = (cellIndex != null && thead && thead.rows && thead.rows.length ? [...thead.rows] : []).concat(tbody && tbody.rows && tbody.rows.length ? [...tbody.rows] : []);
 
@@ -2307,15 +2346,15 @@ window.Radzen = {
                 break;
         }
     } else if (key == 'ArrowRight') {
-        while (table.nextSelectedCellIndex < rows[table.nextSelectedIndex].cells.length - 1) {
+        while (table.nextSelectedCellIndex < lastCellIndex(rows[table.nextSelectedIndex])) {
             table.nextSelectedCellIndex++;
-            if (!rows[table.nextSelectedIndex] || !rows[table.nextSelectedIndex].cells[table.nextSelectedCellIndex] || !rows[table.nextSelectedIndex].cells[table.nextSelectedCellIndex].classList.contains('rz-state-disabled'))
+            if (!rows[table.nextSelectedIndex] || !cellAt(rows[table.nextSelectedIndex], table.nextSelectedCellIndex) || !cellAt(rows[table.nextSelectedIndex], table.nextSelectedCellIndex).classList.contains('rz-state-disabled'))
                 break;
         }
     } else if (key == 'ArrowLeft') {
         while (table.nextSelectedCellIndex > 0) {
             table.nextSelectedCellIndex--;
-            if (!rows[table.nextSelectedIndex] || !rows[table.nextSelectedIndex].cells[table.nextSelectedCellIndex] || !rows[table.nextSelectedIndex].cells[table.nextSelectedCellIndex].classList.contains('rz-state-disabled'))
+            if (!rows[table.nextSelectedIndex] || !cellAt(rows[table.nextSelectedIndex], table.nextSelectedCellIndex) || !cellAt(rows[table.nextSelectedIndex], table.nextSelectedCellIndex).classList.contains('rz-state-disabled'))
                 break;
         }
     } else if (isVirtual && (key == 'PageDown' || key == 'End')) {
@@ -2371,7 +2410,11 @@ window.Radzen = {
         }
     };
 
-    if (key == 'ArrowLeft' || key == 'ArrowRight' || (key == 'ArrowUp' && cellIndex != null && table.nextSelectedIndex == 0 && table.parentNode.scrollTop == 0)) {
+    if (key == 'ArrowLeft' || key == 'ArrowRight' || key == 'FocusCell' || (key == 'ArrowUp' && cellIndex != null && table.nextSelectedIndex == 0 && table.parentNode.scrollTop == 0)) {
+        if (!rows[table.nextSelectedIndex]) {
+            return [table.nextSelectedIndex, table.nextSelectedCellIndex];
+        }
+
         var highlightedCells = rows[table.nextSelectedIndex].querySelectorAll('.rz-state-focused');
         if (highlightedCells.length) {
             for (var i = 0; i < highlightedCells.length; i++) {
@@ -2381,17 +2424,21 @@ window.Radzen = {
 
         if (
             table.nextSelectedCellIndex >= 0 &&
-            table.nextSelectedCellIndex <= rows[table.nextSelectedIndex].cells.length - 1
+            table.nextSelectedCellIndex <= lastCellIndex(rows[table.nextSelectedIndex])
         ) {
-            var cell = rows[table.nextSelectedIndex].cells[table.nextSelectedCellIndex];
+            var cell = cellAt(rows[table.nextSelectedIndex], table.nextSelectedCellIndex);
 
-            if (!cell.classList.contains('rz-state-focused')) {
-                cell.classList.add('rz-state-focused');
-                if (!isVirtual && table.parentElement.scrollWidth > table.parentElement.clientWidth) {
-                    Radzen.scrollIntoViewIfNeeded(cell);
+            if (cell) {
+                if (!cell.classList.contains('rz-state-focused')) {
+                    cell.classList.add('rz-state-focused');
+                    if (virtualColumns) {
+                        Radzen.scrollGridCellIntoView(table.parentElement, cell);
+                    } else if (!isVirtual && table.parentElement.scrollWidth > table.parentElement.clientWidth) {
+                        Radzen.scrollIntoViewIfNeeded(cell);
+                    }
                 }
+                setActiveDescendant(cell);
             }
-            setActiveDescendant(cell);
         }
     } else if (key == 'ArrowDown' || key == 'ArrowUp' || (!isVirtual && (key == 'PageDown' || key == 'PageUp' || key == 'Home' || key == 'End'))) {
         var highlighted = table.querySelectorAll('.rz-state-focused');
@@ -2810,8 +2857,20 @@ window.Radzen = {
         }
     }
   },
-  openTooltip: function (target, id, delay, duration, position, closeTooltipOnDocumentClick, instance, callback, clientX, clientY) {
+  openTooltip: function (target, id, delay, duration, position, closeTooltipOnDocumentClick, instance, callback, clientX, clientY, tooltipId) {
     Radzen.closeTooltip(id);
+
+    var popupInstance = instance;
+    if (instance && tooltipId != null) {
+        popupInstance = {
+            invokeMethodAsync: function (method, position) {
+                if (position == null) {
+                    return instance.invokeMethodAsync.apply(instance, arguments);
+                }
+                return instance.invokeMethodAsync('RadzenTooltip.UpdatePosition', position, tooltipId);
+            }
+        };
+    }
 
     if (clientX != null && clientY != null) {
         position = null;
@@ -2827,9 +2886,9 @@ window.Radzen = {
     }
 
     if (delay) {
-        Radzen[id + 'delay'] = setTimeout(Radzen.openPopup, delay, target, id, false, position, clientX, clientY, instance, callback, closeTooltipOnDocumentClick, false, disableSmartPosition);
+        Radzen[id + 'delay'] = setTimeout(Radzen.openPopup, delay, target, id, false, position, clientX, clientY, popupInstance, callback, closeTooltipOnDocumentClick, false, disableSmartPosition);
     } else {
-        Radzen.openPopup(target, id, false, position, clientX, clientY, instance, callback, closeTooltipOnDocumentClick, false, disableSmartPosition);
+        Radzen.openPopup(target, id, false, position, clientX, clientY, popupInstance, callback, closeTooltipOnDocumentClick, false, disableSmartPosition);
     }
 
     if (duration) {
@@ -4851,6 +4910,22 @@ window.Radzen = {
     return await new Promise(function (resolve) {
       canvas.toBlob(resolve, 'image/png');
     });
+  },
+  getImageFileSize: async function (input) {
+    var file = input && input.files && input.files[0];
+    if (!file) return null;
+
+    var url = URL.createObjectURL(file);
+    try {
+      var img = new Image();
+      img.src = url;
+      await img.decode();
+      return [img.naturalWidth, img.naturalHeight];
+    } catch (e) {
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   },
   downloadSvgAsPng: async function (svg, fileName, width, height) {
     var blob = await this.svgToPng(svg, width, height);
@@ -7292,7 +7367,7 @@ window.Radzen = {
 
                   try {
                       if (columns.length) {
-                          grid.invokeMethodAsync('RadzenGrid.OnColumnsResized', columnIndex, widths[columnIndex], widths);
+                          grid.invokeMethodAsync('RadzenGrid.OnColumnsResized', columnIndex, widths[columns.indexOf(col)], widths);
                       } else {
                           grid.invokeMethodAsync('RadzenGrid.OnColumnResized', columnIndex, cell.getBoundingClientRect().width);
                       }
@@ -8053,8 +8128,123 @@ Radzen.createAutoComplete = function(el, popupId, openOnFocus, minLength, instan
     if (list) list.removeEventListener('mousedown', clearActive);
   }};
 };
-Radzen.createDataGrid = function(el) {
+Radzen.observeScroll = function (scrollable, notify) {
+  var rtl = Radzen.isRTL(scrollable);
+  var inflight = false;
+
+  function position() {
+    return {
+      // In RTL the native scrollLeft is 0 at the right and negative toward the left;
+      // report a non-negative logical scroll so the C# layout math stays direction-agnostic.
+      left: rtl ? -scrollable.scrollLeft : scrollable.scrollLeft,
+      top: scrollable.scrollTop
+    };
+  }
+
+  function run() {
+    var current = position();
+
+    inflight = true;
+
+    notify(current.left, current.top).finally(function () {
+      inflight = false;
+
+      var latest = position();
+
+      if (scrollable.isConnected && (current.top !== latest.top || current.left !== latest.left)) {
+        run();
+      }
+    });
+  }
+
+  function onScroll() {
+    if (!inflight) {
+      run();
+    }
+  }
+
+  scrollable.addEventListener('scroll', onScroll);
+
+  return {
+    position: position,
+    dispose: function () { scrollable.removeEventListener('scroll', onScroll); }
+  };
+};
+Radzen.createDataGridColumnVirtualization = function (el, ref) {
+  var scroller = null;
+  for (var i = 0; i < el.children.length; i++) {
+    if (el.children[i].classList.contains('rz-data-grid-data')) {
+      scroller = el.children[i];
+      break;
+    }
+  }
+  if (!scroller) return { dispose: function () {} };
+
+  var disposed = false;
+  var lastWidth = -1;
+  var focusedColumn = -1;
+
+  function report() {
+    if (disposed) return Promise.resolve();
+    lastWidth = scroller.clientWidth;
+    return ref.invokeMethodAsync('RadzenGrid.OnColumnScroll', scroll.position().left, lastWidth).catch(function () { });
+  }
+
+  var scroll = Radzen.observeScroll(scroller, function (left, top) {
+    return report();
+  });
+
+  var resizeObserver = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(function () {
+      if (scroller.clientWidth !== lastWidth) {
+        report();
+      }
+    });
+    resizeObserver.observe(scroller);
+  }
+
+  function columnOf(target) {
+    var table = scroller.querySelector('.rz-grid-table');
+    var node = target;
+    while (node && node !== scroller) {
+      if (node.hasAttribute && node.hasAttribute('data-virtual-column-index') && node.closest('.rz-grid-table') === table) {
+        return parseInt(node.getAttribute('data-virtual-column-index'), 10);
+      }
+      node = node.parentNode;
+    }
+    return -1;
+  }
+
+  function reportFocus(column) {
+    if (disposed || column === focusedColumn) return;
+    focusedColumn = column;
+    suppressDisposed(ref.invokeMethodAsync('RadzenGrid.OnColumnFocus', column));
+  }
+
+  function onFocusIn(e) { reportFocus(columnOf(e.target)); }
+  function onFocusOut(e) {
+    if (!e.relatedTarget || !scroller.contains(e.relatedTarget)) {
+      reportFocus(-1);
+    }
+  }
+
+  scroller.addEventListener('focusin', onFocusIn);
+  scroller.addEventListener('focusout', onFocusOut);
+
+  report();
+
+  return { dispose: function () {
+    disposed = true;
+    scroll.dispose();
+    if (resizeObserver) resizeObserver.disconnect();
+    scroller.removeEventListener('focusin', onFocusIn);
+    scroller.removeEventListener('focusout', onFocusOut);
+  }};
+};
+Radzen.createDataGrid = function(el, ref) {
   if (!el) return { dispose: function() {} };
+  var columnVirtualization = ref ? Radzen.createDataGridColumnVirtualization(el, ref) : null;
   function onClick(e) {
     if (e.__rzDataGridHandled) return;
     e.__rzDataGridHandled = true;
@@ -8092,6 +8282,9 @@ Radzen.createDataGrid = function(el) {
     el.removeEventListener('mousedown', onMousedown);
     if (frozenObserver) {
       frozenObserver.disconnect();
+    }
+    if (columnVirtualization) {
+      columnVirtualization.dispose();
     }
   }};
 };
@@ -8976,32 +9169,8 @@ Radzen.createVirtualItemContainer = (scrollable, content, ref) => {
     e.preventDefault();
   });
 
-  var rtl = Radzen.isRTL(scrollable);
-
-  var inflight = false;
-
-  function notifyScroll() {
-    var scrollTop = scrollable.scrollTop;
-    // In RTL the native scrollLeft is 0 at the right and negative toward the left;
-    // report a non-negative logical scroll so the C# layout math stays direction-agnostic.
-    var scrollLeft = rtl ? -scrollable.scrollLeft : scrollable.scrollLeft;
-
-    inflight = true;
-
-    ref.invokeMethodAsync('OnScroll', scrollLeft, scrollTop).finally(function () {
-      inflight = false;
-
-      if (scrollTop !== scrollable.scrollTop ||
-          scrollLeft !== (rtl ? -scrollable.scrollLeft : scrollable.scrollLeft)) {
-        notifyScroll();
-      }
-    });
-  }
-
-  scrollable.addEventListener('scroll', function () {
-    if (!inflight) {
-      notifyScroll();
-    }
+  Radzen.observeScroll(scrollable, function (scrollLeft, scrollTop) {
+    return ref.invokeMethodAsync('OnScroll', scrollLeft, scrollTop);
   });
 
   var observer = new ResizeObserver(function () {
