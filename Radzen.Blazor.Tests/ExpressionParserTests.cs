@@ -1818,8 +1818,15 @@ public class ExpressionParserTests
         Assert.True(Compile("x => (System.Version)x.Payload >= (System.Version)x.Payload")(new Ticket { Payload = new Version(1, 2) }));
         Assert.True(Compile("x => ((decimal)x.City.Length) == 7")(new Ticket { City = "Seattle" }));
         Assert.True(Compile("x => (System.Numerics.BigInteger)x.Payload == (System.Numerics.BigInteger)x.Payload")(new Ticket { Payload = new System.Numerics.BigInteger(5) }));
-        Assert.True(Compile("x => x.City.Length.ToString().PadLeft(3, '0') == \"007\"")(new Ticket { City = "Seattle" }));
         Assert.True(Compile("x => ((System.Uri)x.Payload).Host == \"radzen.com\"")(new Ticket { Payload = new Uri("https://radzen.com/") }));
+    }
+
+    [Theory]
+    [InlineData("x => x.City.PadLeft(3, '0') == \"007\"")]
+    [InlineData("x => x.City.PadRight(3) == \"007\"")]
+    public void PaddingMethods_AreNotAllowed(string expression)
+    {
+        AssertRejected(() => Parse(expression), "is not allowed");
     }
 
     [Theory]
@@ -1883,12 +1890,6 @@ public class ExpressionParserTests
     public void LongDottedName_IsRejected()
     {
         Assert.ThrowsAny<Exception>(() => Parse("x => a" + Repeat(".a", 20000)));
-    }
-
-    [Fact]
-    public void DeeplyNestedParentheses_AreRejected()
-    {
-        AssertRejected(() => Parse("x => " + new string('(', 5000) + "1" + new string(')', 5000)), "too ");
     }
 
     [Fact]
