@@ -12,7 +12,7 @@
 
     var chart = RequireChart();
     var index = chart.Series.IndexOf(this);
-    var className = $"rz-bubble-series rz-series-{index}";
+    var className = $"rz-bubble-series {SeriesClass}";
     var style = $"clip-path: url(#{chart.ClipPath}); -webkit-clip-path: url(#{chart.ClipPath});";
 
     var (minValue, maxValue) = SizeRange();
@@ -24,6 +24,11 @@
       var radius = GetBubbleRadius(item, minValue, maxValue);
       return new { X = x, Y = y, Radius = radius, Item = item };
     }).Where(b => !IsEmpty(b.X, b.Y, b.Radius)).OrderByDescending(b => b.Radius).ToList();
+
+    if (TryGetPlotRange(categoryScale, out var plotStart, out var plotEnd))
+    {
+      bubbles = bubbles.Where(b => BandIntersects(b.X - b.Radius, b.Radius * 2, StrokeWidth, plotStart, plotEnd)).ToList();
+    }
 
     var fill = Fill ?? Stroke;
 

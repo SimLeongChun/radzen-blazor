@@ -13,16 +13,22 @@
         var category = ComposeCategory(categoryScale);
         var style = $"clip-path: url(#{chart.ClipPath}); -webkit-clip-path: url(#{chart.ClipPath});";
         var index = chart.Series.IndexOf(this);
-        var className = $"rz-highlow-series rz-series-{index}";
+        var className = $"rz-highlow-series {SeriesClass}";
 
         var high = High;
         var low = Low;
 
+        var cull = TryGetPlotRange(categoryScale, out var plotStart, out var plotEnd);
         return
         @<g class="@className">
             @foreach (var data in Items)
             {
                 var cx = category(data);
+
+                if (cull && !BandIntersects(cx, 0, StrokeWidth, plotStart, plotEnd))
+                {
+                    continue;
+                }
 
                 var highValue = high(data);
                 var lowValue = low(data);

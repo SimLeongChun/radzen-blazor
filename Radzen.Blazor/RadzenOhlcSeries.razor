@@ -12,7 +12,7 @@
         var chart = RequireChart();
         var category = ComposeCategory(categoryScale);
         var style = $"clip-path: url(#{chart.ClipPath}); -webkit-clip-path: url(#{chart.ClipPath});";
-        var className = $"rz-ohlc-series rz-series-{chart.Series.IndexOf(this)}";
+        var className = $"rz-ohlc-series {SeriesClass}";
 
         var tickWidth = BarTickWidth;
 
@@ -21,11 +21,17 @@
         var low = Low;
         var close = Close;
 
+        var cull = TryGetPlotRange(categoryScale, out var plotStart, out var plotEnd);
         return
         @<g class="@className">
             @foreach (var data in Items)
             {
                 var cx = category(data);
+
+                if (cull && !BandIntersects(cx - tickWidth, tickWidth * 2, StrokeWidth, plotStart, plotEnd))
+                {
+                    continue;
+                }
 
                 var openValue = open(data);
                 var highValue = high(data);

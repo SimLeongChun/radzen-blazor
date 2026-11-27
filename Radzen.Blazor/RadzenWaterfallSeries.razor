@@ -18,10 +18,11 @@
 
         var slot = Slot;
         var width = slot.Size;
-        var className = $"rz-waterfall-series rz-series-{chart.Series.IndexOf(this)}";
+        var className = $"rz-waterfall-series {SeriesClass}";
         var radius = chart.ColumnOptions.Radius;
 
         var wfItems = ComputeWaterfallItems();
+        var cull = TryGetPlotRange(categoryScale, out var plotStart, out var plotEnd);
 
         return
         @<g class="@className">
@@ -31,6 +32,12 @@
                 var wf = wfItems[i];
 
                 var x = slot.Start(category(data));
+
+                if (cull && !BandIntersects(x, width, StrokeWidth, plotStart, plotEnd))
+                {
+                    continue;
+                }
+
                 var y1 = valueScale.Scale(wf.Start, true);
                 var y2 = valueScale.Scale(wf.End, true);
 

@@ -12,7 +12,7 @@
         var chart = RequireChart();
         var category = ComposeCategory(categoryScale);
         var style = $"clip-path: url(#{chart.ClipPath}); -webkit-clip-path: url(#{chart.ClipPath});";
-        var className = $"rz-box-plot-series rz-series-{chart.Series.IndexOf(this)}";
+        var className = $"rz-box-plot-series {SeriesClass}";
 
         var boxWidth = BoxWidth;
         var halfBox = boxWidth / 2;
@@ -31,11 +31,17 @@
         var medianStroke = MedianStroke ?? stroke ?? "var(--rz-base-background-color)";
         var meanFill = MeanFill ?? "var(--rz-base-background-color)";
 
+        var cull = TryGetPlotRange(categoryScale, out var plotStart, out var plotEnd);
         return
         @<g class="@className">
             @foreach (var data in Items)
             {
                 var cx = category(data);
+
+                if (cull && !BandIntersects(cx - Math.Max(halfBox, halfCap), Math.Max(boxWidth, capWidth), StrokeWidth + 4, plotStart, plotEnd))
+                {
+                    continue;
+                }
 
                 if (IsEmpty(lw(data), lq(data), med(data), uq(data)) || IsEmpty(uw(data), cx))
                 {
